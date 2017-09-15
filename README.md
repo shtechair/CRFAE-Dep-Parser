@@ -61,10 +61,11 @@ RB	PRP	VBZ
 ## Citation
 If you found this repository helpful, you could cite
 ```
-@article{cai2017crf,
+@inproceedings{cai2017crf,
   title={CRF Autoencoder for Unsupervised Dependency Parsing},
   author={Cai, Jiong and Jiang, Yong and Tu, Kewei},
-  journal={Conference on Empirical Methods on Natural Language Processing (EMNLP)},
+  booktitle={Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing},
+  pages={1639--1644},
   year={2017}
 }
 ```

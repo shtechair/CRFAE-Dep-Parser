@@ -1,5 +1,6 @@
 package edu.shanghaitech.nlp.crfae.parser;
 
+import edu.shanghaitech.nlp.crfae.parser.HyperParameter.*;
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
@@ -15,90 +16,42 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 
-import edu.shanghaitech.nlp.crfae.parser.HyperParameter.*;
-
 public class DepParserLauncher {
+    private final static double THRESHOLD = 0.001;
     public static String trainfile = null;
     public static String testfile = null;
     public static String valfile = null;
-
     public static String savedModel = null;
-
     private DepPipe pipe;
     private Parameters params;
-
-    private final static double THRESHOLD = 0.001;
 
     public DepParserLauncher(DepPipe pipe) {
         this.pipe = pipe;
         params = new Parameters(pipe);
     }
 
-    private void evaluatePerformance(String type, String goldfile, String maxSentenceSize) {
+    public static void writePredictionToFile(DepInstance[] instances, int[][] predictions, String filename) {
         try {
-            int maxSenSize = maxSentenceSize.equals("all") ? 1000000 : Integer.parseInt(maxSentenceSize);
-            int[][] predictions = getParses(goldfile, maxSenSize);
-            double[] accuracy = DepEvaluator.evaluate(goldfile, predictions, maxSenSize);
-            Logger.info("Acc of " + type + "-" + maxSentenceSize + ": " + goldfile);
-            Logger.info("Unlabeled Accuracy: " + accuracy[0]);
-            Logger.info("Unlabeled Complete Correct: " + accuracy[1] + "\n");
+            java.io.FileWriter writer = new java.io.FileWriter(new File(filename));
+            int n = instances.length;
+            for (int i = 0; i < n; i++) {
+                int len = instances[i].words.length;
+                writer.write(String.join("\t", Arrays.copyOfRange(instances[i].words, 1, len)) + "\n");
+                writer.write(String.join("\t", Arrays.copyOfRange(instances[i].pos, 1, len)) + "\n");
+                writer.write(String.join("\t", Arrays.copyOfRange(instances[i].upos, 1, len)) + "\n");
+                String[] depStrArr = (Arrays.stream(predictions[i])).mapToObj(String::valueOf).toArray(String[]::new);
+                writer.write(String.join("\t", Arrays.copyOfRange(depStrArr, 1, len)) + "\n");
+                writer.write("\n");
+            }
+            writer.flush();
+            writer.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
-    }
-
-    public void train(DepInstance[] il) {
-        System.out.println("========================");
-        System.out.println("About to train.");
-        System.out.println("Training set size: " + il.length);
-        System.out.println();
-
-        params.kmInit(il);
-
-        boolean trainingDone = false;
-        for (int i = 0; !trainingDone; i++) {
-            System.out.println("========================");
-            System.out.println("Iteration: " + i);
-            System.out.println("========================");
-            System.out.print("Processed: \n");
-
-            Logger.info("Iteration: " + i);
-
-            long start = System.currentTimeMillis();
-            /// Training
-            UnsupervisedTrainer trainer = new UnsupervisedTrainer(il, pipe, params);
-
-            double objectiveBefore = trainer.objectiveFunction.valueAt(il, params);
-            params = trainer.iteration();
-            double objectiveAfter = trainer.objectiveFunction.valueAt(il, params);
-            System.out.format("Objective: %f -> %f\n", objectiveBefore, objectiveAfter);
-            Logger.info("Objective: {} -> {}", objectiveBefore, objectiveAfter);
-
-            trainingDone = ((objectiveBefore - objectiveAfter) / objectiveBefore) < THRESHOLD;
-
-            long end = System.currentTimeMillis();
-            System.out.println("Training iteration took: " + (end - start) + " ms");
-            Logger.info("Training iteration took: " + (end - start) + " ms \n");
-
-        }
-    }
-
-    public int[][] getParses(String inputFile, int maxSentSize) throws IOException {
-        DepInstance[] il = pipe.createInstances(inputFile);
-        List<int[]> ret = new ArrayList<>();
-
-        DepParser parser = new DepParser(params);
-        for (int i = 0; i < il.length; i++) {
-            // Because of DepInstance add Root in the Sentence.
-            if (il[i].length - 1 <= maxSentSize) {
-                ret.add(parser.testTimeSingleRootParseArray(il[i]));
-            }
-        }
-
-        return ret.toArray(new int[ret.size()][]);
     }
 
     static void processArguments(String[] args) {
@@ -191,23 +144,6 @@ public class DepParserLauncher {
         G.ns = ns;
     }
 
-    public void saveModel() throws IOException {
-        FileOutputStream fout = new FileOutputStream(
-                G.outputDir + "/param.model");
-        ObjectOutputStream oos = new ObjectOutputStream(fout);
-        oos.writeObject(params);
-        fout.close();
-    }
-
-    public void loadModel(String name) throws IOException, ClassNotFoundException {
-        // TODO.
-        FileInputStream fin = new FileInputStream(name);
-        ObjectInputStream ois = new ObjectInputStream(fin);
-        params = (Parameters) ois.readObject();
-        pipe = params.pipe;
-        fin.close();
-    }
-
     /////////////////////////////////////////////////////
     // RUNNING THE PARSER
     ////////////////////////////////////////////////////
@@ -275,6 +211,93 @@ public class DepParserLauncher {
         }
 
         dp.saveModel();
+    }
+
+    private void evaluatePerformance(String type, String goldfile, String maxSentenceSize) {
+        try {
+            int maxSenSize = maxSentenceSize.equals("all") ? 1000000 : Integer.parseInt(maxSentenceSize);
+            int[][] predictions = getParses(goldfile, maxSenSize);
+
+            DepInstance[] il = pipe.createInstances(goldfile);
+            il = Arrays.stream(il).filter(x -> x.length - 1 <= maxSenSize).toArray(DepInstance[]::new);
+
+            writePredictionToFile(il, predictions, String.format("%s/%s-%s-pred.txt", G.outputDir, type, maxSentenceSize));
+
+            double[] accuracy = DepEvaluator.evaluate(goldfile, predictions, maxSenSize);
+            Logger.info("Acc of " + type + "-" + maxSentenceSize + ": " + goldfile);
+            Logger.info("Unlabeled Accuracy: " + accuracy[0]);
+            Logger.info("Unlabeled Complete Correct: " + accuracy[1] + "\n");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void train(DepInstance[] il) {
+        System.out.println("========================");
+        System.out.println("About to train.");
+        System.out.println("Training set size: " + il.length);
+        System.out.println();
+
+        params.kmInit(il);
+
+        boolean trainingDone = false;
+        for (int i = 0; !trainingDone; i++) {
+            System.out.println("========================");
+            System.out.println("Iteration: " + i);
+            System.out.println("========================");
+            System.out.print("Processed: \n");
+
+            Logger.info("Iteration: " + i);
+
+            long start = System.currentTimeMillis();
+            /// Training
+            UnsupervisedTrainer trainer = new UnsupervisedTrainer(il, pipe, params);
+
+            double objectiveBefore = trainer.objectiveFunction.valueAt(il, params);
+            params = trainer.iteration();
+            double objectiveAfter = trainer.objectiveFunction.valueAt(il, params);
+            System.out.format("Objective: %f -> %f\n", objectiveBefore, objectiveAfter);
+            Logger.info("Objective: {} -> {}", objectiveBefore, objectiveAfter);
+
+            trainingDone = ((objectiveBefore - objectiveAfter) / objectiveBefore) < THRESHOLD;
+
+            long end = System.currentTimeMillis();
+            System.out.println("Training iteration took: " + (end - start) + " ms");
+            Logger.info("Training iteration took: " + (end - start) + " ms \n");
+
+        }
+    }
+
+    public int[][] getParses(String inputFile, int maxSentSize) throws IOException {
+        DepInstance[] il = pipe.createInstances(inputFile);
+        List<int[]> ret = new ArrayList<>();
+
+        DepParser parser = new DepParser(params);
+        for (int i = 0; i < il.length; i++) {
+            // Because of DepInstance add Root in the Sentence.
+            if (il[i].length - 1 <= maxSentSize) {
+                ret.add(parser.testTimeSingleRootParseArray(il[i]));
+            }
+        }
+
+        return ret.toArray(new int[ret.size()][]);
+    }
+
+    public void saveModel() throws IOException {
+        FileOutputStream fout = new FileOutputStream(
+                G.outputDir + "/param.model");
+        ObjectOutputStream oos = new ObjectOutputStream(fout);
+        oos.writeObject(params);
+        fout.close();
+    }
+
+    public void loadModel(String name) throws IOException, ClassNotFoundException {
+        // TODO.
+        FileInputStream fin = new FileInputStream(name);
+        ObjectInputStream ois = new ObjectInputStream(fin);
+        params = (Parameters) ois.readObject();
+        pipe = params.pipe;
+        fin.close();
     }
 }
 
